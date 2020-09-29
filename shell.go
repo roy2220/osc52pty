@@ -181,8 +181,15 @@ func (s *shell) pipeStdout() {
 }
 
 func makeShellCommand() *exec.Cmd {
-	shellName := getShellName()
-	shellCommand := exec.Command(shellName)
+	var shellCommand *exec.Cmd
+
+	if args := os.Args[1:]; len(args) >= 1 {
+		shellCommand = exec.Command(args[0], args[1:]...)
+	} else {
+		shellName := getShellName()
+		shellCommand = exec.Command(shellName)
+	}
+
 	return shellCommand
 }
 
