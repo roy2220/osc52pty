@@ -42,11 +42,13 @@ func (oe *oscExecutor) handleCapturedData(data []byte) bool {
 
 func (oe *oscExecutor) setClipboard(rawData []byte) error {
 	data := make([]byte, base64.StdEncoding.DecodedLen(len(rawData)))
+	n, err := base64.StdEncoding.Decode(data, rawData)
 
-	if _, err := base64.StdEncoding.Decode(data, rawData); err != nil {
+	if err != nil {
 		return err
 	}
 
+	data = data[:n]
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	command := exec.CommandContext(ctx, "pbcopy")
