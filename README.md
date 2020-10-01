@@ -50,3 +50,7 @@ printf "\ePtmux;\e\e]52;c;%s\a\e\\" "$(echo -n 'THE TEXT TO COPY' | openssl base
 
 BTW, TMUX's clipboard can play well with the OSC 52, search `set-clipboard` in
 `man tmux` for more details.
+
+## See also
+
+- [remote-pbcopy-iterm2](https://github.com/skaji/remote-pbcopy-iterm2)
