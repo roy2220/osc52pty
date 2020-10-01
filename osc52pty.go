@@ -16,9 +16,15 @@ func main() {
 }
 
 func runShell() (int, error) {
-	shell := shell{}
+	var shell shell
 
-	if err := shell.Open(); err != nil {
+	shellOptions := shellOptions{
+		ShellInterceptorFactory: func(inputDataSender, outputDataSender dataSender) (shellInterceptor, error) {
+			return new(oscExecutor).Init(inputDataSender, outputDataSender), nil
+		},
+	}
+
+	if err := shell.Open(shellOptions); err != nil {
 		return 0, err
 	}
 

@@ -1,28 +1,25 @@
 package main
 
 type parser struct {
-	CaptureBegin        []byte
-	CaptureEnd          []byte
-	CapturedDataHandler func([]byte) bool
-	IgnoredDataHandler  func([]byte) bool
-
-	findCaptureBegin    bool
 	captureBeginPattern pattern
 	captureEndPattern   pattern
+	capturedDataHandler dataHandler
+	ignoredDataHandler  dataHandler
+	findCaptureBegin    bool
 	capturedData        []byte
 }
 
-func (p *parser) Init() *parser {
+func (p *parser) Init(captureBegin []byte, captureEnd []byte, capturedDataHandler dataHandler, ignoredDataHandler dataHandler) *parser {
+	p.captureBeginPattern.Init(captureBegin)
+	p.captureEndPattern.Init(captureEnd)
+	p.capturedDataHandler = capturedDataHandler
+	p.ignoredDataHandler = ignoredDataHandler
 	p.findCaptureBegin = true
-	p.captureBeginPattern = pattern{Raw: p.CaptureBegin}
-	p.captureBeginPattern.Init()
-	p.captureEndPattern = pattern{Raw: p.CaptureEnd}
-	p.captureEndPattern.Init()
 	return p
 }
 
 func (p *parser) FeedData(data []byte) bool {
-	ignoredData := []byte(nil)
+	var ignoredData []byte
 
 Loop:
 	for {
@@ -31,7 +28,7 @@ Loop:
 			i, ok := p.captureBeginPattern.FindStop(data, &ignoredData)
 
 			if len(ignoredData) >= 1 {
-				if !p.IgnoredDataHandler(ignoredData) {
+				if !p.ignoredDataHandler(ignoredData) {
 					return false
 				}
 			}
@@ -49,7 +46,7 @@ Loop:
 				break Loop
 			}
 
-			if !p.CapturedDataHandler(p.capturedData) {
+			if !p.capturedDataHandler(p.capturedData) {
 				return false
 			}
 
@@ -63,38 +60,38 @@ Loop:
 }
 
 type pattern struct {
-	Raw []byte
-
+	raw                 []byte
 	kmpNext             []int
 	matchedPrefixLength int
 }
 
-func (p *pattern) Init() *pattern {
-	p.kmpNext = makeKMPNext(p.Raw)
+func (p *pattern) Init(raw []byte) *pattern {
+	p.raw = raw
+	p.kmpNext = makeKMPNext(raw)
 	return p
 }
 
 func (p *pattern) FindStop(data []byte, skippedData *[]byte) (int, bool) {
 	i, j := 0, p.matchedPrefixLength
 
-	for ; i < len(data) && j < len(p.Raw); i, j = i+1, j+1 {
+	for ; i < len(data) && j < len(p.raw); i, j = i+1, j+1 {
 		k := j
 
-		for j >= 0 && data[i] != p.Raw[j] {
+		for j >= 0 && data[i] != p.raw[j] {
 			j = p.kmpNext[j]
 		}
 
 		if j < k {
 			if j < 0 {
-				*skippedData = append(*skippedData, p.Raw[:k]...)
+				*skippedData = append(*skippedData, p.raw[:k]...)
 				*skippedData = append(*skippedData, data[i])
 			} else {
-				*skippedData = append(*skippedData, p.Raw[:k-j]...)
+				*skippedData = append(*skippedData, p.raw[:k-j]...)
 			}
 		}
 	}
 
-	if j < len(p.Raw) {
+	if j < len(p.raw) {
 		p.matchedPrefixLength = j
 		return 0, false
 	}
@@ -116,3 +113,5 @@ func makeKMPNext(pattern []byte) []int {
 
 	return kmpNext
 }
+
+type dataHandler func(data []byte) (ok bool)

@@ -86,31 +86,27 @@ func TestParser(t *testing.T) {
 		},
 	} {
 		t.Run(tt.CaptureBegin+"..."+tt.CaptureEnd, func(t *testing.T) {
-			capturedData := []byte(nil)
-			ignoredData := []byte(nil)
-			p := parser{
-				CaptureBegin: []byte(tt.CaptureBegin),
-				CaptureEnd:   []byte(tt.CaptureEnd),
-				CapturedDataHandler: func(data []byte) bool {
-					for i := range data {
-						if data[i] == '\x00' {
-							return false
-						}
+			var capturedData []byte
+			capturedDataHandler := func(data []byte) bool {
+				for i := range data {
+					if data[i] == '\x00' {
+						return false
 					}
-					capturedData = append(capturedData, data...)
-					return true
-				},
-				IgnoredDataHandler: func(data []byte) bool {
-					for i := range data {
-						if data[i] == '\x00' {
-							return false
-						}
-					}
-					ignoredData = append(ignoredData, data...)
-					return true
-				},
+				}
+				capturedData = append(capturedData, data...)
+				return true
 			}
-			p.Init()
+			var ignoredData []byte
+			ignoredDataHandler := func(data []byte) bool {
+				for i := range data {
+					if data[i] == '\x00' {
+						return false
+					}
+				}
+				ignoredData = append(ignoredData, data...)
+				return true
+			}
+			p := new(parser).Init([]byte(tt.CaptureBegin), []byte(tt.CaptureEnd), capturedDataHandler, ignoredDataHandler)
 			for _, fdc := range tt.FeedDataCalls {
 				ok := p.FeedData([]byte(fdc.Data))
 				assert.Equal(t, fdc.OK, ok)
@@ -240,9 +236,8 @@ func TestPattern(t *testing.T) {
 		},
 	} {
 		t.Run(tt.Pattern, func(t *testing.T) {
-			p := pattern{Raw: []byte(tt.Pattern)}
-			p.Init()
-			skippedData := []byte(nil)
+			p := new(pattern).Init([]byte(tt.Pattern))
+			var skippedData []byte
 			for _, fsc := range tt.FindStopCalls {
 				i, ok := p.FindStop([]byte(fsc.Data), &skippedData)
 				assert.Equal(t, fsc.I, i)

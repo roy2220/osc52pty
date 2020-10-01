@@ -16,21 +16,30 @@ import (
 const bufferSize = 8 * 1024
 
 type shell struct {
-	Stdin  *os.File
-	Stdout *os.File
-
-	command  *exec.Cmd
-	pty      *os.File
-	cleanups []func(*shell)
+	cmdLine     []string
+	stdin       io.ReadCloser
+	stdout      io.WriteCloser
+	interceptor shellInterceptor
+	command     *exec.Cmd
+	ptmx        *os.File
+	cleanups    []func(*shell)
 }
 
-func (s *shell) Open() (returnedErr error) {
-	if s.Stdin == nil {
-		s.Stdin = os.Stdin
-	}
+func (s *shell) Open(options shellOptions) (returnedErr error) {
+	options.Sanitize()
+	s.cmdLine = options.CmdLine
+	s.stdin = options.Stdin
+	s.stdout = options.Stdout
 
-	if s.Stdout == nil {
-		s.Stdout = os.Stdout
+	defer func() {
+		if returnedErr != nil {
+			s.stdin.Close()
+			s.stdout.Close()
+		}
+	}()
+
+	if err := s.createShellInterceptor(options.ShellInterceptorFactory); err != nil {
+		return err
 	}
 
 	defer func() {
@@ -48,8 +57,8 @@ func (s *shell) Open() (returnedErr error) {
 	}
 
 	s.resizePTY()
-	go s.pipeStdin()
-	go s.pipeStdout()
+	s.pipeStdin()
+	s.pipeStdout()
 	return nil
 }
 
@@ -61,7 +70,13 @@ func (s *shell) Close() {
 	s.cleanups = nil
 }
 
-func (s *shell) Wait() (int, error) {
+func (s *shell) Wait() (_ int, returnedErr error) {
+	defer func() {
+		if returnedErr != nil {
+			s.stdin.Close()
+		}
+	}()
+
 	if err := s.command.Wait(); err != nil {
 		if exitError, ok := err.(*exec.ExitError); ok {
 			return exitError.ExitCode(), nil
@@ -73,38 +88,80 @@ func (s *shell) Wait() (int, error) {
 	return 0, nil
 }
 
+func (s *shell) createShellInterceptor(shellInterceptorFactory shellInterceptorFactory) error {
+	inputDataSender := func(data []byte) bool {
+		if _, err := s.ptmx.Write(data); err != nil {
+			log.Printf("write ptmx failed: %v", err)
+			return false
+		}
+
+		return true
+	}
+
+	outputDataSender := func(data []byte) bool {
+		if _, err := s.stdout.Write(data); err != nil {
+			log.Printf("write stdout failed: %v", err)
+			return false
+		}
+
+		return true
+	}
+
+	shellInterceptor, err := shellInterceptorFactory(inputDataSender, outputDataSender)
+
+	if err != nil {
+		log.Printf("create shell interceptor failed: %v", err)
+		return err
+	}
+
+	s.interceptor = shellInterceptor
+	return nil
+}
+
 func (s *shell) startPTY() error {
-	s.command = makeShellCommand()
+	s.command = exec.Command(s.cmdLine[0], s.cmdLine[1:]...)
 	var err error
-	s.pty, err = pty.Start(s.command)
+	s.ptmx, err = pty.Start(s.command)
 
 	if err != nil {
 		return fmt.Errorf("start pty failed: %v", err)
 	}
 
-	s.cleanups = append(s.cleanups, func(s *shell) { s.pty.Close() })
+	s.cleanups = append(s.cleanups, func(s *shell) { s.ptmx.Close() })
 	return nil
 }
 
 func (s *shell) makeTerminalRaw() error {
-	oldState, err := terminal.MakeRaw(int(s.Stdin.Fd()))
+	stdin, ok := s.stdin.(*os.File)
+
+	if !ok {
+		return nil
+	}
+
+	oldState, err := terminal.MakeRaw(int(stdin.Fd()))
 
 	if err != nil {
 		return fmt.Errorf("make terminal raw failed: %v", err)
 	}
 
-	s.cleanups = append(s.cleanups, func(*shell) { terminal.Restore(int(s.Stdin.Fd()), oldState) })
+	s.cleanups = append(s.cleanups, func(*shell) { terminal.Restore(int(stdin.Fd()), oldState) })
 	return nil
 }
 
 func (s *shell) resizePTY() {
+	stdin, ok := s.stdin.(*os.File)
+
+	if !ok {
+		return
+	}
+
 	signals := make(chan os.Signal, 1)
 	s.cleanups = append(s.cleanups, func(*shell) { close(signals) })
 	signal.Notify(signals, syscall.SIGWINCH)
 
 	go func() {
 		for range signals {
-			if err := pty.InheritSize(s.Stdin, s.pty); err != nil {
+			if err := pty.InheritSize(stdin, s.ptmx); err != nil {
 				log.Printf("resize pty failed: %s", err)
 			}
 		}
@@ -114,83 +171,109 @@ func (s *shell) resizePTY() {
 }
 
 func (s *shell) pipeStdin() {
-	buffer := make([]byte, bufferSize)
+	go func() {
+		buffer := make([]byte, bufferSize)
 
-	for {
-		n, err := s.Stdin.Read(buffer)
+		for {
+			n, err := s.stdin.Read(buffer)
 
-		if err != nil {
-			if err == io.EOF {
+			if err != nil {
+				if err == io.EOF {
+					return
+				}
+
+				log.Printf("read stdin failed: %v", err)
 				return
 			}
 
-			log.Printf("read stdin failed: %v", err)
-			return
-		}
+			data := buffer[:n]
 
-		data := buffer[:n]
-
-		if _, err := s.pty.Write(data); err != nil {
-			log.Printf("write pty failed: %v", err)
-			return
+			if !s.interceptor.HandleInputData(data) {
+				return
+			}
 		}
-	}
+	}()
 }
 
 func (s *shell) pipeStdout() {
-	buffer := make([]byte, bufferSize)
+	go func() {
+		defer s.stdout.Close()
+		buffer := make([]byte, bufferSize)
 
-	oscExecutor := (&oscExecutor{
-		InputDataHandler: func(data []byte) bool {
-			if _, err := s.pty.Write(data); err != nil {
-				log.Printf("write pty failed: %v", err)
-				return false
-			}
+		for {
+			n, err := s.ptmx.Read(buffer)
 
-			return true
-		},
+			if err != nil {
+				if err == io.EOF {
+					return
+				}
 
-		OutputDataHandler: func(data []byte) bool {
-			if _, err := s.Stdout.Write(data); err != nil {
-				log.Printf("write stdout failed: %v", err)
-				return false
-			}
-
-			return true
-		},
-	}).Init()
-
-	for {
-		n, err := s.pty.Read(buffer)
-
-		if err != nil {
-			if err == io.EOF {
+				log.Printf("read ptmx failed: %v", err)
 				return
 			}
 
-			log.Printf("read pty failed: %v", err)
-			return
-		}
+			data := buffer[:n]
 
-		data := buffer[:n]
-
-		if !oscExecutor.FeedData(data) {
-			return
+			if !s.interceptor.HandleOutputData(data) {
+				return
+			}
 		}
+	}()
+}
+
+type shellOptions struct {
+	CmdLine                 []string
+	Stdin                   io.ReadCloser
+	Stdout                  io.WriteCloser
+	ShellInterceptorFactory shellInterceptorFactory
+}
+
+func (so *shellOptions) Sanitize() {
+	if len(so.CmdLine) == 0 {
+		so.CmdLine = []string{getShellName()}
+	}
+
+	if so.Stdin == nil {
+		so.Stdin = os.Stdin
+	}
+
+	if so.Stdout == nil {
+		so.Stdout = os.Stdout
+	}
+
+	if so.ShellInterceptorFactory == nil {
+		so.ShellInterceptorFactory = dummyShellInterceptorFactory
 	}
 }
 
-func makeShellCommand() *exec.Cmd {
-	var shellCommand *exec.Cmd
+type (
+	shellInterceptorFactory func(inputDataSender, outputDataSender dataSender) (shellInterceptor shellInterceptor, ok error)
+	dataSender              func(data []byte) (ok bool)
 
-	if args := os.Args[1:]; len(args) >= 1 {
-		shellCommand = exec.Command(args[0], args[1:]...)
-	} else {
-		shellName := getShellName()
-		shellCommand = exec.Command(shellName)
+	shellInterceptor interface {
+		HandleInputData([]byte) (ok bool)
+		HandleOutputData([]byte) (ok bool)
 	}
+)
 
-	return shellCommand
+type dummyShellInterceptor struct {
+	InputDataSender  dataSender
+	OutputDataSender dataSender
+}
+
+func (dsi *dummyShellInterceptor) HandleInputData(data []byte) bool {
+	return dsi.InputDataSender(data)
+}
+
+func (dsi *dummyShellInterceptor) HandleOutputData(data []byte) bool {
+	return dsi.OutputDataSender(data)
+}
+
+func dummyShellInterceptorFactory(inputDataSender, outputDataSender dataSender) (shellInterceptor, error) {
+	return &dummyShellInterceptor{
+		InputDataSender:  inputDataSender,
+		OutputDataSender: outputDataSender,
+	}, nil
 }
 
 func getShellName() string {

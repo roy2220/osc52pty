@@ -10,48 +10,53 @@ import (
 )
 
 type oscExecutor struct {
-	InputDataHandler  func([]byte) bool
-	OutputDataHandler func([]byte) bool
-
-	parser parser
+	inputDataSender dataSender
+	parser          parser
 }
 
-func (oe *oscExecutor) Init() *oscExecutor {
-	oe.parser = parser{
-		CaptureBegin:        escapeSequenceBegin,
-		CaptureEnd:          escapeSequenceEnd,
-		CapturedDataHandler: oe.handleCapturedData,
-		IgnoredDataHandler:  oe.OutputDataHandler,
-	}
+var _ shellInterceptor = (*oscExecutor)(nil)
 
-	oe.parser.Init()
+func (oe *oscExecutor) Init(inputDataSender, outputDataSender dataSender) *oscExecutor {
+	oe.inputDataSender = inputDataSender
+	oe.parser.Init(escapeSequenceBegin, escapeSequenceEnd, oe.handleDataToCopy, dataHandler(outputDataSender))
 	return oe
 }
 
-func (oe *oscExecutor) FeedData(data []byte) bool {
+func (oe *oscExecutor) HandleInputData(data []byte) bool {
+	return oe.inputDataSender(data)
+}
+
+func (oe *oscExecutor) HandleOutputData(data []byte) bool {
 	return oe.parser.FeedData(data)
 }
 
-func (oe *oscExecutor) handleCapturedData(data []byte) bool {
-	if err := oe.setClipboard(data); err != nil {
-		log.Printf("failed to set clipboard: %v", err)
+func (oe *oscExecutor) handleDataToCopy(data []byte) bool {
+	if err := setClipboard(copyToClipboardCmdLine, data); err != nil {
+		log.Printf("set clipboard failed: %v", err)
 	}
 
 	return true
 }
 
-func (oe *oscExecutor) setClipboard(rawData []byte) error {
-	data := make([]byte, base64.StdEncoding.DecodedLen(len(rawData)))
-	n, err := base64.StdEncoding.Decode(data, rawData)
+var (
+	escapeSequenceBegin = []byte("\x1b]52;c;")
+	escapeSequenceEnd   = []byte("\x07")
+)
+
+var copyToClipboardCmdLine = []string{"pbcopy"}
+
+func setClipboard(copyToClipboardCmdLine []string, rawData []byte) error {
+	buffer := make([]byte, base64.StdEncoding.DecodedLen(len(rawData)))
+	n, err := base64.StdEncoding.Decode(buffer, rawData)
 
 	if err != nil {
 		return err
 	}
 
-	data = data[:n]
+	data := buffer[:n]
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	command := exec.CommandContext(ctx, "pbcopy")
+	command := exec.CommandContext(ctx, copyToClipboardCmdLine[0], copyToClipboardCmdLine[1:]...)
 	command.Stdin = bytes.NewReader(data)
 
 	if err := command.Run(); err != nil {
@@ -60,8 +65,3 @@ func (oe *oscExecutor) setClipboard(rawData []byte) error {
 
 	return nil
 }
-
-var (
-	escapeSequenceBegin = []byte("\x1b]52;c;")
-	escapeSequenceEnd   = []byte("\x07")
-)
