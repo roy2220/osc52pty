@@ -23,7 +23,7 @@ GO111MODULE=on go get github.com/roy2220/osc52pty
 Now you got the binary:
 
 ```
-ls "$(go env GOPATH)/bin/osc52pty"
+ls -lh "$(go env GOPATH)/bin/osc52pty"
 ```
 
 ## Usage
