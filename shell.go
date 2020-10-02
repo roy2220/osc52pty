@@ -230,7 +230,11 @@ type shellOptions struct {
 
 func (so *shellOptions) Sanitize() {
 	if len(so.CmdLine) == 0 {
-		so.CmdLine = []string{getShellName()}
+		if len(os.Args) < 2 {
+			so.CmdLine = []string{getShellName()}
+		} else {
+			so.CmdLine = os.Args[1:]
+		}
 	}
 
 	if so.Stdin == nil {
