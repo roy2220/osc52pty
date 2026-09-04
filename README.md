@@ -16,25 +16,29 @@ Although Terminal.app do NOT support OSC 52, here is the workaround for it.
 
 ## Installation
 
-Go toolchain is required.
+Go 1.18 or newer is required. Install the latest release with:
 
-```
-GO111MODULE=on go get github.com/roy2220/osc52pty
+```bash
+go install github.com/roy2220/osc52pty@latest
 ```
 
-Now you got the binary:
+The binary is installed in `GOBIN`, or in `GOPATH/bin` when `GOBIN` is not
+set:
 
-```
+```bash
 ls -lh "$(go env GOPATH)/bin/osc52pty"
 ```
 
 ## Usage
 
-Launch a shell with `osc52pty` to get OSC 52 supported:
+Launch your default shell with `osc52pty` to add OSC 52 clipboard support:
 
 ```bash
-osc52pty bash
+osc52pty
 ```
+
+You can also provide a shell or another command explicitly, for example
+`osc52pty /bin/zsh`.
 
 Within the shell launched, send a OSC 52 sequence to testify:
 
@@ -44,15 +48,46 @@ printf "\e]52;c;%s\a" "$(echo -n 'THE TEXT TO COPY' | openssl base64 -A)"
 
 Now the system clipboard is set to `THE TEXT TO COPY`.
 
-Note: If you're going to send a OSC 52 sequence through TMUX, use this instead:
+### Remote tmux over SSH
+
+Start `osc52pty` **on the Mac**, then connect to the remote host from the
+wrapped shell:
+
+```bash
+osc52pty
+ssh user@example.com
+```
+
+On the remote host, tmux must be told that its outer terminal can set the
+clipboard. For tmux 3.2 or newer, add the following to `~/.tmux.conf`:
+
+```tmux
+set -s set-clipboard external
+set -as terminal-features ',xterm-256color:clipboard'
+```
+
+Reload the configuration, then verify that tmux has the `Ms` clipboard
+capability:
+
+```bash
+tmux source-file ~/.tmux.conf
+tmux info | grep 'Ms:'
+```
+
+`Ms` should contain an OSC 52 sequence instead of showing `[missing]`. Text
+copied in tmux copy mode will then be written to the Mac system clipboard by
+`osc52pty`, including across SSH. For example, with the default prefix and vi
+copy-mode keys: press `Ctrl-b [`, start a selection with `Space`, move to the
+end, then press `Enter`. The copied text can be pasted into a Mac application
+with `Command-V`.
+
+For a direct protocol test through tmux, use:
 
 ```bash
 printf "\ePtmux;\e\e]52;c;%s\a\e\\" "$(echo -n 'THE TEXT TO COPY' | openssl base64 -A)"
 ```
 
-BTW, TMUX's clipboard can play well with the OSC 52, search `set-clipboard` in
-`man tmux` for more details.
-
 ## See also
 
 - [remote-pbcopy-iterm2](https://github.com/skaji/remote-pbcopy-iterm2)
+- [tmux clipboard documentation](https://github.com/tmux/tmux/wiki/Clipboard)
