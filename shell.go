@@ -10,7 +10,7 @@ import (
 	"syscall"
 
 	"github.com/creack/pty"
-	"golang.org/x/crypto/ssh/terminal"
+	"golang.org/x/term"
 )
 
 const bufferSize = 8 * 1024
@@ -138,13 +138,13 @@ func (s *shell) makeTerminalRaw() error {
 		return nil
 	}
 
-	oldState, err := terminal.MakeRaw(int(stdin.Fd()))
+	oldState, err := term.MakeRaw(int(stdin.Fd()))
 
 	if err != nil {
 		return fmt.Errorf("make terminal raw failed: %v", err)
 	}
 
-	s.cleanups = append(s.cleanups, func(*shell) { terminal.Restore(int(stdin.Fd()), oldState) })
+	s.cleanups = append(s.cleanups, func(*shell) { term.Restore(int(stdin.Fd()), oldState) })
 	return nil
 }
 
